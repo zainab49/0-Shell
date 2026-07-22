@@ -3,11 +3,11 @@
 use std::fs;
 use std::path::Path;
 
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Removes each operand. Directories are only removed when `-r` (recursive)
 /// is supplied, matching standard `rm` semantics.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], _io: &mut Io) -> CmdResult {
     let mut recursive = false;
     let mut operands: Vec<&String> = Vec::new();
 

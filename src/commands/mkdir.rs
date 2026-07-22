@@ -2,11 +2,11 @@
 
 use std::fs;
 
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Creates each directory operand. Supports `-p`, which creates parent
 /// directories as needed and treats an existing target as success.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], _io: &mut Io) -> CmdResult {
     let (parents, operands) = match args.first() {
         Some(flag) if flag == "-p" => (true, &args[1..]),
         _ => (false, args),

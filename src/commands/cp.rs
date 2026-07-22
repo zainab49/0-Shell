@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::commands::util;
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Copies one or more source files to a destination.
 ///
@@ -12,7 +12,7 @@ use crate::commands::CmdResult;
 /// * `cp SRC... DIR` copies every source into the existing directory `DIR`.
 ///
 /// Directories are rejected, matching `cp` without `-r`.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], _io: &mut Io) -> CmdResult {
     if args.len() < 2 {
         return Err("missing file operand".to_string());
     }

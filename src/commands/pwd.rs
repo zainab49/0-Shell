@@ -2,11 +2,10 @@
 
 use std::env;
 
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Prints the absolute path of the current working directory.
-pub fn run(_args: &[String]) -> CmdResult {
+pub fn run(_args: &[String], io: &mut Io) -> CmdResult {
     let cwd = env::current_dir().map_err(|e| e.to_string())?;
-    println!("{}", cwd.display());
-    Ok(())
+    writeln!(io.out, "{}", cwd.display()).map_err(|e| e.to_string())
 }

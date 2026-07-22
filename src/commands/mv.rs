@@ -4,14 +4,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::commands::util;
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Moves one or more sources to a destination.
 ///
 /// * `mv SRC DST` renames `SRC` to `DST`, or moves it into `DST` if that is
 ///   an existing directory.
 /// * `mv SRC... DIR` moves every source into the existing directory `DIR`.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], _io: &mut Io) -> CmdResult {
     if args.len() < 2 {
         return Err("missing file operand".to_string());
     }

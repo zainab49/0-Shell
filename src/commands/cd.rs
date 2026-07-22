@@ -3,11 +3,11 @@
 use std::env;
 use std::path::PathBuf;
 
-use crate::commands::CmdResult;
+use crate::commands::{CmdResult, Io};
 
 /// Changes directory to the given path, or to `$HOME` when called with no
 /// argument. Rejects extra operands, matching typical shell behaviour.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], _io: &mut Io) -> CmdResult {
     if args.len() > 1 {
         return Err("too many arguments".to_string());
     }

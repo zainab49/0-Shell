@@ -2,22 +2,24 @@
 
 use std::collections::HashMap;
 use std::fs::{self, Metadata};
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::commands::CmdResult;
+use crate::color;
+use crate::commands::{CmdResult, Io};
 
 /// Parsed command-line options for `ls`.
 #[derive(Clone, Copy, Default)]
 struct Flags {
-    long: bool,    // -l : long listing format
-    all: bool,     // -a : include entries starting with '.'
+    long: bool,     // -l : long listing format
+    all: bool,      // -a : include entries starting with '.'
     classify: bool, // -F : append an indicator (one of */=>@|) to entries
 }
 
 /// Entry point for the `ls` built-in.
-pub fn run(args: &[String]) -> CmdResult {
+pub fn run(args: &[String], io: &mut Io) -> CmdResult {
     let mut flags = Flags::default();
     let mut operands: Vec<&String> = Vec::new();
 
@@ -41,7 +43,7 @@ pub fn run(args: &[String]) -> CmdResult {
         operands.push(&default);
     }
 
-    list_operands(&operands, flags)
+    list_operands(&operands, flags, io)
 }
 
 /// A single item to be displayed, together with the metadata needed to render
@@ -53,7 +55,7 @@ struct Entry {
 }
 
 impl Entry {
-    fn from_path(path: &Path, display: String) -> std::io::Result<Self> {
+    fn from_path(path: &Path, display: String) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
         let link_target = if metadata.file_type().is_symlink() {
             fs::read_link(path).ok()
@@ -71,7 +73,7 @@ impl Entry {
 /// Lists every operand. File operands are grouped and printed first; directory
 /// operands are then expanded, each with a header when more than one target is
 /// involved.
-fn list_operands(operands: &[&String], flags: Flags) -> CmdResult {
+fn list_operands(operands: &[&String], flags: Flags, io: &mut Io) -> CmdResult {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -96,20 +98,20 @@ fn list_operands(operands: &[&String], flags: Flags) -> CmdResult {
     let mut first_block = true;
 
     if !files.is_empty() {
-        render(&files, flags, &resolver, now);
+        render(&files, flags, &resolver, now, io).map_err(|e| e.to_string())?;
         first_block = false;
     }
 
     for dir in dirs {
         if !first_block {
-            println!();
+            writeln!(io.out).map_err(|e| e.to_string())?;
         }
         first_block = false;
 
         if show_headers {
-            println!("{dir}:");
+            writeln!(io.out, "{dir}:").map_err(|e| e.to_string())?;
         }
-        if let Err(e) = list_directory(Path::new(dir), flags, &resolver, now) {
+        if let Err(e) = list_directory(Path::new(dir), flags, &resolver, now, io) {
             eprintln!("ls: cannot open directory '{dir}': {e}");
         }
     }
@@ -119,7 +121,13 @@ fn list_operands(operands: &[&String], flags: Flags) -> CmdResult {
 
 /// Reads a directory, builds its entry list (honouring `-a`), sorts it, and
 /// renders it.
-fn list_directory(dir: &Path, flags: Flags, resolver: &NameResolver, now: i64) -> std::io::Result<()> {
+fn list_directory(
+    dir: &Path,
+    flags: Flags,
+    resolver: &NameResolver,
+    now: i64,
+    io: &mut Io,
+) -> io::Result<()> {
     let mut entries: Vec<Entry> = Vec::new();
 
     if flags.all {
@@ -147,27 +155,39 @@ fn list_directory(dir: &Path, flags: Flags, resolver: &NameResolver, now: i64) -
     if flags.long {
         let total: u64 = entries.iter().map(|e| e.metadata.blocks()).sum();
         // st_blocks counts 512-byte units; ls reports 1024-byte blocks.
-        println!("total {}", total / 2);
+        writeln!(io.out, "total {}", total / 2)?;
     }
 
-    render(&entries, flags, resolver, now);
-    Ok(())
+    render(&entries, flags, resolver, now, io)
 }
 
 /// Renders a slice of entries in either long or short form.
-fn render(entries: &[Entry], flags: Flags, resolver: &NameResolver, now: i64) {
+fn render(
+    entries: &[Entry],
+    flags: Flags,
+    resolver: &NameResolver,
+    now: i64,
+    io: &mut Io,
+) -> io::Result<()> {
     if flags.long {
-        render_long(entries, flags, resolver, now);
+        render_long(entries, flags, resolver, now, io)
     } else {
         for entry in entries {
-            println!("{}", decorate(entry, flags));
+            writeln!(io.out, "{}", decorate(entry, flags, io.color))?;
         }
+        Ok(())
     }
 }
 
 /// Renders entries in `-l` long format with columns aligned to their widest
 /// value, mirroring GNU `ls`.
-fn render_long(entries: &[Entry], flags: Flags, resolver: &NameResolver, now: i64) {
+fn render_long(
+    entries: &[Entry],
+    flags: Flags,
+    resolver: &NameResolver,
+    now: i64,
+    io: &mut Io,
+) -> io::Result<()> {
     struct Row {
         perms: String,
         links: String,
@@ -178,13 +198,16 @@ fn render_long(entries: &[Entry], flags: Flags, resolver: &NameResolver, now: i6
         name: String,
     }
 
+    let color = io.color;
     let rows: Vec<Row> = entries
         .iter()
         .map(|e| {
             let meta = &e.metadata;
             let name = match &e.link_target {
-                Some(target) => format!("{} -> {}", decorate(e, flags), target.display()),
-                None => decorate(e, flags),
+                Some(target) => {
+                    format!("{} -> {}", decorate(e, flags, color), target.display())
+                }
+                None => decorate(e, flags, color),
             };
             Row {
                 perms: permission_string(meta.mode()),
@@ -204,7 +227,8 @@ fn render_long(entries: &[Entry], flags: Flags, resolver: &NameResolver, now: i6
     let w_size = max_width(rows.iter().map(|r| r.size.len()));
 
     for r in &rows {
-        println!(
+        writeln!(
+            io.out,
             "{} {:>w_links$} {:<w_owner$} {:<w_group$} {:>w_size$} {} {}",
             r.perms,
             r.links,
@@ -217,25 +241,43 @@ fn render_long(entries: &[Entry], flags: Flags, resolver: &NameResolver, now: i6
             w_owner = w_owner,
             w_group = w_group,
             w_size = w_size,
-        );
+        )?;
     }
+    Ok(())
 }
 
-/// Returns the display name with a `-F` type indicator appended when relevant.
-fn decorate(entry: &Entry, flags: Flags) -> String {
-    if !flags.classify {
-        return entry.display.clone();
-    }
+/// Returns the display name with a `-F` type indicator and/or colour applied.
+fn decorate(entry: &Entry, flags: Flags, color: bool) -> String {
     let mode = entry.metadata.mode();
-    let suffix = match mode & 0o170000 {
-        0o040000 => "/",                                   // directory
-        0o120000 => "@",                                   // symbolic link
-        0o010000 => "|",                                   // FIFO
-        0o140000 => "=",                                   // socket
-        0o100000 if mode & 0o111 != 0 => "*",              // executable file
-        _ => "",
-    };
-    format!("{}{}", entry.display, suffix)
+    let file_type = mode & 0o170000;
+
+    let mut name = entry.display.clone();
+
+    if color {
+        let code = match file_type {
+            0o040000 => Some(color::BOLD_BLUE),              // directory
+            0o120000 => Some(color::BOLD_CYAN),              // symlink
+            0o100000 if mode & 0o111 != 0 => Some(color::BOLD_GREEN), // executable
+            _ => None,
+        };
+        if let Some(code) = code {
+            name = color::paint(true, code, &name);
+        }
+    }
+
+    if flags.classify {
+        let suffix = match file_type {
+            0o040000 => "/",                      // directory
+            0o120000 => "@",                      // symbolic link
+            0o010000 => "|",                      // FIFO
+            0o140000 => "=",                      // socket
+            0o100000 if mode & 0o111 != 0 => "*", // executable file
+            _ => "",
+        };
+        name.push_str(suffix);
+    }
+
+    name
 }
 
 /// Produces a sort key that mimics `ls`: comparison ignores a leading dot and

@@ -1,16 +1,24 @@
 //! 0-shell: a minimalist Unix-like shell written in Rust.
 //!
-//! The shell reads a line at a time, tokenises it (honouring single and
-//! double quotes), and dispatches to a built-in command implemented purely
-//! with Rust's standard library — no external binaries are ever spawned.
+//! The shell reads a line at a time, parses it into pipelines (honouring
+//! quotes, `$VAR` expansion, `;` chaining, `|` pipes and `< > >>`
+//! redirection), and dispatches to built-in commands implemented purely with
+//! Rust's standard library — no external binaries are ever spawned.
+//!
+//! Interactive sessions add a raw-mode line editor with command history and
+//! Tab completion, a working-directory prompt, colourised output, and safe
+//! Ctrl+C handling.
 
+mod color;
 mod commands;
+mod executor;
+mod history;
+mod line_editor;
 mod parser;
 mod shell;
+mod terminal;
 
 fn main() {
-    // Run the interactive loop. The process exit code mirrors the shell's
-    // final state so it composes well with other tools.
     let exit_code = shell::run();
     std::process::exit(exit_code);
 }
