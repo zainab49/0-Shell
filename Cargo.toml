@@ -1,0 +1,17 @@
+[package]
+name = "zero-shell"
+version = "1.0.0"
+edition = "2021"
+description = "A minimalist Unix-like shell implemented in Rust"
+license = "MIT"
+
+# The binary is named `0-shell` to match the project spec, while the
+# package keeps a valid crate identifier.
+[[bin]]
+name = "0-shell"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
