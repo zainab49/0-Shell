@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::fs::{self, Metadata};
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::color;
 use crate::commands::{CmdResult, Io};
+
+use platform::MetaExt;
 
 /// Parsed command-line options for `ls`.
 #[derive(Clone, Copy, Default)]
@@ -384,10 +385,15 @@ struct NameResolver {
 
 impl NameResolver {
     fn new() -> Self {
-        NameResolver {
-            users: parse_id_file("/etc/passwd"),
-            groups: parse_id_file("/etc/group"),
+        let mut users = parse_id_file("/etc/passwd");
+        let mut groups = parse_id_file("/etc/group");
+        // On platforms without a passwd database every entry reports id 0;
+        // give that id a meaningful name instead of printing a bare "0".
+        if let Some(name) = platform::fallback_owner() {
+            users.entry(0).or_insert_with(|| name.clone());
+            groups.entry(0).or_insert(name);
         }
+        NameResolver { users, groups }
     }
 
     fn user(&self, uid: u32) -> String {
@@ -451,5 +457,115 @@ mod tests {
     fn civil_from_days_known_date() {
         // 2000-01-01 is 10957 days after the epoch.
         assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+    }
+}
+
+/// Platform shims for the file metadata `ls -l` renders.
+///
+/// On Unix these map straight onto the `stat` fields. Elsewhere they are
+/// synthesised from the portable parts of `Metadata`, so the rendering code
+/// above stays platform-independent and the shell still builds outside the
+/// Docker image.
+mod platform {
+    use std::fs::Metadata;
+
+    /// The subset of `stat` fields the long listing needs.
+    pub trait MetaExt {
+        fn mode(&self) -> u32;
+        fn nlink(&self) -> u64;
+        fn uid(&self) -> u32;
+        fn gid(&self) -> u32;
+        fn size(&self) -> u64;
+        fn mtime(&self) -> i64;
+        fn blocks(&self) -> u64;
+    }
+
+    #[cfg(unix)]
+    impl MetaExt for Metadata {
+        fn mode(&self) -> u32 {
+            std::os::unix::fs::MetadataExt::mode(self)
+        }
+        fn nlink(&self) -> u64 {
+            std::os::unix::fs::MetadataExt::nlink(self)
+        }
+        fn uid(&self) -> u32 {
+            std::os::unix::fs::MetadataExt::uid(self)
+        }
+        fn gid(&self) -> u32 {
+            std::os::unix::fs::MetadataExt::gid(self)
+        }
+        fn size(&self) -> u64 {
+            std::os::unix::fs::MetadataExt::size(self)
+        }
+        fn mtime(&self) -> i64 {
+            std::os::unix::fs::MetadataExt::mtime(self)
+        }
+        fn blocks(&self) -> u64 {
+            std::os::unix::fs::MetadataExt::blocks(self)
+        }
+    }
+
+    /// A `passwd` database exists, so no substitute name is needed.
+    #[cfg(unix)]
+    pub fn fallback_owner() -> Option<String> {
+        None
+    }
+
+    #[cfg(not(unix))]
+    impl MetaExt for Metadata {
+        /// Synthesises a POSIX mode word: the file type comes from
+        /// `file_type()` and the permission bits from the read-only flag,
+        /// which is how WSL and Git for Windows present the same files.
+        fn mode(&self) -> u32 {
+            let file_type = self.file_type();
+            let readonly = self.permissions().readonly();
+            if file_type.is_dir() {
+                0o040000 | if readonly { 0o555 } else { 0o755 }
+            } else if file_type.is_symlink() {
+                0o120000 | 0o777
+            } else {
+                0o100000 | if readonly { 0o444 } else { 0o644 }
+            }
+        }
+
+        /// Hard-link counts are not exposed by `Metadata` off Unix.
+        fn nlink(&self) -> u64 {
+            1
+        }
+
+        fn uid(&self) -> u32 {
+            0
+        }
+
+        fn gid(&self) -> u32 {
+            0
+        }
+
+        fn size(&self) -> u64 {
+            self.len()
+        }
+
+        fn mtime(&self) -> i64 {
+            use std::time::UNIX_EPOCH;
+            match self.modified() {
+                Ok(t) => match t.duration_since(UNIX_EPOCH) {
+                    Ok(d) => d.as_secs() as i64,
+                    Err(e) => -(e.duration().as_secs() as i64),
+                },
+                Err(_) => 0,
+            }
+        }
+
+        /// `st_blocks` counts 512-byte units; round the logical size up.
+        fn blocks(&self) -> u64 {
+            (self.len() + 511) / 512
+        }
+    }
+
+    /// Without a `passwd` database every entry reports id 0, so fall back to
+    /// the logged-in account name for the owner and group columns.
+    #[cfg(not(unix))]
+    pub fn fallback_owner() -> Option<String> {
+        std::env::var("USERNAME").ok().filter(|n| !n.is_empty())
     }
 }
